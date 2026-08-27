@@ -1,0 +1,15 @@
+{
+  "name": "deploy-detective",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Deploy Detective (D2) — approval-gated incident response + analytics agent on TrueForge",
+  "license": "MIT",
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "build": "npm --prefix deploy-mcp run build",
+    "seed": "npm --prefix deploy-mcp run seed",
+    "reseed": "npm --prefix deploy-mcp run reseed",
+    "test": "npm --prefix deploy-mcp test",
+    "smoke": "bash scripts/smoke.sh"
+  }
+}
