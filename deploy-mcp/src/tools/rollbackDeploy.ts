@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { openWorld } from "../world.js";
-import { textResult, iso, HOUR_MS, round } from "../shared.js";
+import { textResult, iso, HOUR_MS } from "../shared.js";
 
 export const rollbackDeploy = {
   name: "rollback_deploy",
@@ -39,44 +39,61 @@ export const rollbackDeploy = {
         `deploy ${args.id} (${dep.service}) rolled back — reason: ${args.reason}`,
       );
 
-      // Simulate recovery: 3 hourly buckets decaying toward baseline, only if the
-      // service is actually degraded (avoids fabricating change for innocent deploys).
+      // Simulate recovery: 3 hourly buckets decaying toward baseline — only if the
+      // service is actually degraded (never fabricate change for innocent deploys).
       let recoverySimulated = false;
       const last = db
         .prepare(
           `SELECT ts, errors * 1.0 / NULLIF(requests, 0) AS er, p99_ms, requests
              FROM metrics WHERE service = ? ORDER BY ts DESC LIMIT 1`,
         )
-        .get(dep.service) as { ts: string; er: number | null; p99_ms: number; requests: number } | undefined;
+        .get(dep.service) as
+        | { ts: string; er: number | null; p99_ms: number; requests: number }
+        | undefined;
       const base = db
         .prepare(
           `SELECT AVG(er) AS er, AVG(p99) AS p99 FROM (
              SELECT errors * 1.0 / NULLIF(requests, 0) AS er, p99_ms AS p99
                FROM metrics WHERE service = ? ORDER BY ts ASC LIMIT 48)`,
         )
-        .get(dep.service) as { er: number | null; p99: number | null };
+        .get(dep.service) as { er: number | null; p99: number | null } | undefined;
 
-      if (last?.er !== null && base?.er !== null && last && last.er > 2 * (base.er ?? 0)) {
-        const endpoint = db
+      if (
+        last &&
+        base &&
+        last.er !== null &&
+        base.er !== null &&
+        base.p99 !== null &&
+        last.er > 2 * base.er
+      ) {
+        const endpointRow = db
           .prepare(`SELECT endpoint FROM metrics WHERE service = ? LIMIT 1`)
-          .get(dep.service) as { endpoint: string };
-        let t = Date.parse(last.ts) + HOUR_MS;
-        const steps = [
-          { f: 0.45, p: 0.5 },
-          { f: 0.15, p: 0.2 },
-          { f: 1.0, p: 1.0 }, // back to baseline
-        ];
-        const ins = db.prepare(
-          `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms) VALUES (?, ?, ?, ?, ?, ?)`,
-        );
-        for (const s of steps) {
-          const er = (base.er ?? 0) + (last.er - (base.er ?? 0)) * s.f;
-          const p99 = (base.p99 ?? 200) + (last.p99_ms - (base.p99 ?? 200)) * s.p;
-          const requests = last.requests;
-          ins.run(iso(t), dep.service, endpoint.endpoint, requests, Math.round(requests * er), round(p99, 1));
-          t += HOUR_MS;
+          .get(dep.service) as { endpoint: string } | undefined;
+        if (endpointRow) {
+          const ins = db.prepare(
+            `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          );
+          let t = Date.parse(last.ts) + HOUR_MS;
+          for (const s of [
+            { f: 0.45, p: 0.5 },
+            { f: 0.15, p: 0.2 },
+            { f: 0, p: 0 }, // fully back to baseline
+          ]) {
+            const er = base.er + (last.er - base.er) * s.f;
+            const p99 = base.p99 + (last.p99_ms - base.p99) * s.p;
+            ins.run(
+              iso(t),
+              dep.service,
+              endpointRow.endpoint,
+              last.requests,
+              Math.max(0, Math.round(last.requests * er)),
+              Math.round(p99 * 10) / 10,
+            );
+            t += HOUR_MS;
+          }
+          recoverySimulated = true;
         }
-        recoverySimulated = true;
       }
       db.exec("COMMIT");
 
@@ -91,7 +108,11 @@ export const rollbackDeploy = {
           : "No degradation was present to recover from.",
       });
     } catch (err) {
-      try { db.exec("ROLLBACK"); } catch { /* already closed/rolled back */ }
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* no active transaction */
+      }
       return textResult({ ok: false, error: (err as Error).message });
     } finally {
       db.close();

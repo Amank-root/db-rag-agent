@@ -13,9 +13,7 @@ test("keeps existing LIMIT", () => {
 });
 
 test("allows WITH (read-only CTE)", () => {
-  assert.doesNotThrow(() =>
-    assertReadOnlySql("WITH x AS (SELECT 1 AS n) SELECT n FROM x"),
-  );
+  assert.doesNotThrow(() => assertReadOnlySql("WITH x AS (SELECT 1 AS n) SELECT n FROM x"));
 });
 
 test("rejects non-SELECT statements", () => {

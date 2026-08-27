@@ -30,7 +30,12 @@ export const openPr = {
         now,
         `PR #${prNumber} opened: ${args.title}`,
       );
-      return textResult({ ok: true, pr_number: prNumber, url, note: "Simulated inside the self-contained world." });
+      return textResult({
+        ok: true,
+        pr_number: prNumber,
+        url,
+        note: "Simulated inside the self-contained world.",
+      });
     } finally {
       db.close();
     }

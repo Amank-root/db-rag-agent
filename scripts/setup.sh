@@ -15,4 +15,4 @@ npm run seed
 
 echo ""
 echo "✅ deploy-mcp built and world seeded."
-echo "Next: npx @truefoundry/trueforge  → then load connectors/deploy-mcp.json and agent.json (see README)."
+echo "Next: npx @truefoundry/trueforge → then load connectors/deploy-mcp.json and agent.json (see README)."

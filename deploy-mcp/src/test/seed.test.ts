@@ -6,8 +6,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { buildWorld } from "../seed/build.js";
 
-const tmp = () =>
-  path.join(fs.mkdtempSync(path.join(os.tmpdir(), "d2-")), "world.sqlite");
+const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "d2-")), "world.sqlite");
 
 function dump(file: string): string {
   const db = new DatabaseSync(file, { readOnly: true });
@@ -41,12 +40,12 @@ test("culprit dep-4c21 exists and its metrics spike is detectable", () => {
   };
   assert.ok(dep, "culprit deploy exists");
   const start = dep.started_at;
-  const agg = (cond: string) =>
+  const agg = (op: string) =>
     (
       db
         .prepare(
           `SELECT AVG(errors * 1.0 / NULLIF(requests, 0)) AS er FROM metrics
-            WHERE service = ? AND ts ${cond} ?`,
+            WHERE service = ? AND ts ${op} ?`,
         )
         .get(dep.service, start) as { er: number }
     ).er;

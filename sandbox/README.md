@@ -1,6 +1,6 @@
 # Sandbox flow
 
-The agent never guesses the culprit. Flow:
+The agent never guesses the culprit:
 
 1. Fetch evidence read-only via MCP (`list_deploys`, `deploy_stats`, `query_db`).
 2. Write a short Python script adapting `bisect_template.py`, with the fetched rows

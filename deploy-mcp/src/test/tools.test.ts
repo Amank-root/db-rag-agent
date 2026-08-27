@@ -20,8 +20,7 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const parse = (res: Awaited<ReturnType<typeof queryDb.handler>>) =>
-  JSON.parse(res.content[0].text);
+const parse = (res: { content: Array<{ text: string }> }) => JSON.parse(res.content[0].text);
 
 test("query_db runs read-only SELECT", async () => {
   const res = parse(await queryDb.handler({ sql: "SELECT COUNT(*) AS n FROM deploys" }));

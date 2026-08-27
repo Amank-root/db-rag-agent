@@ -13,7 +13,7 @@ export function assertReadOnlySql(sql: string): { normalized: string } {
   if (trimmed.includes(";")) throw new Error("Only a single statement is allowed.");
 
   // Blank out string literals so keywords inside data don't false-positive,
-  // and so smuggled statements inside literals don't false-negative.
+  // and smuggled statements inside literals don't false-negative.
   const noStrings = trimmed
     .replace(/'(?:[^']|'')*'/g, "''")
     .replace(/"(?:[^"]|"")*"/g, '""');
@@ -26,6 +26,8 @@ export function assertReadOnlySql(sql: string): { normalized: string } {
     throw new Error(`Forbidden keyword in read-only query: ${hit[1].toUpperCase()}`);
   }
 
-  const normalized = /\blimit\s+\d+/i.test(noStrings) ? trimmed : `${trimmed}\nLIMIT ${MAX_ROWS}`;
+  const normalized = /\blimit\s+\d+/i.test(noStrings)
+    ? trimmed
+    : `${trimmed}\nLIMIT ${MAX_ROWS}`;
   return { normalized };
 }

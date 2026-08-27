@@ -87,7 +87,7 @@ export function buildWorld(file: string): WorldStats {
 
   db.exec("BEGIN");
 
-  // --- deploys -------------------------------------------------------------
+  // --- deploys ---------------------------------------------------------------
   const versionCounters = new Map<string, number>();
   const insertDeploy = db.prepare(
     `INSERT INTO deploys (id, service, version, commit_sha, title, author, started_at, finished_at, status, rolled_back, rolled_back_at, notes)
@@ -111,7 +111,7 @@ export function buildWorld(file: string): WorldStats {
     );
   }
 
-  // --- alerts ---------------------------------------------------------------
+  // --- alerts ----------------------------------------------------------------
   const insertAlert = db.prepare(
     `INSERT INTO alerts (id, name, source, service, severity, title, status, created_at, payload_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -130,7 +130,7 @@ export function buildWorld(file: string): WorldStats {
     );
   }
 
-  // --- metrics (hourly buckets, ts = bucket start) --------------------------
+  // --- metrics (hourly buckets, ts = bucket start) ---------------------------
   const insertMetric = db.prepare(
     `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms) VALUES (?, ?, ?, ?, ?, ?)`,
   );

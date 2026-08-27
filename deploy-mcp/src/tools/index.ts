@@ -11,9 +11,9 @@ import { openPr } from "./openPr.js";
 
 /**
  * Convention (judging criterion: control & safety):
- *  - read-only tools  → annotations.readOnlyHint: true  → run freely
- *  - write tools      → annotations.readOnlyHint: false → gated by TrueForge approvals
- *  - destructive      → annotations.destructiveHint: true
+ *  - read-only tools → annotations.readOnlyHint: true  → run freely
+ *  - write tools     → annotations.readOnlyHint: false → gated by TrueForge approvals
+ *  - destructive     → annotations.destructiveHint: true
  */
 const TOOLS = [
   listDeploys,
@@ -29,7 +29,7 @@ const TOOLS = [
 
 export function registerTools(server: McpServer): void {
   for (const t of TOOLS) {
-    // Cast: each tool's zod shape is heterogeneous; structural match is verified at runtime by the SDK.
+    // Cast: each tool's zod shape is heterogeneous; the SDK validates at runtime.
     server.registerTool(t.name, t.config as never, t.handler as never);
   }
 }

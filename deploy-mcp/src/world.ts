@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-/** Works from both src/ (tsx) and dist/ (compiled). */
+/** Resolves correctly from both src/ (tsx) and dist/ (compiled). */
 export const DEFAULT_DB_PATH = path.resolve(here, "..", "data", "incident-world.sqlite");
 
 export function dbPath(): string {

@@ -43,7 +43,7 @@ export const deployStats = {
                FROM metrics
               WHERE service = ? AND ts >= ? AND ts < ?`,
           )
-          .get(dep.service, iso(from), iso(to)) as Agg;
+          .get(dep.service, iso(from), iso(to)) as unknown as Agg;
 
       const pre = agg(start - w, start);
       const post = agg(start, start + w);
@@ -52,7 +52,7 @@ export const deployStats = {
         deploy_id: args.id,
         service: dep.service,
         started_at: dep.started_at,
-        window_hours: (args.windowHours ?? 3),
+        window_hours: args.windowHours ?? 3,
         pre: {
           avg_error_rate: round(pre.avgErrorRate),
           avg_p99_ms: round(pre.avgP99, 1),
