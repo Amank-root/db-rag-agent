@@ -11,6 +11,6 @@ Built for @WeMakeDevs × @TrueFoundry × @Qodo's Agent Harness Hackathon on True
 🔁 persistent sessions — refresh and it resumes
 
 Fully seeded & deterministic: clone it, run it, break nothing.
-👉 github.com/<your-user>/deploy-detective
+👉 github.com/amank-root/db-rag-agent
 
 #AgentHarnessHackathon #TrueForge #AIagents

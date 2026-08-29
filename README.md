@@ -51,7 +51,7 @@ a Daytona API key. Keys go **only** into TrueForge Settings — never in this re
 
 ```bash
 # 1. Clone and build the world
-git clone https://github.com/<your-user>/deploy-detective.git
+git clone https://github.com/amank-root/db-rag-agent.git
 cd deploy-detective
 ./scripts/setup.sh          # installs, compiles, seeds the deterministic world
 
