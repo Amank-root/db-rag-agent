@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, existsSync, rmSync, renameSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
 import path from "node:path";
 import { HOUR_MS, iso } from "../shared.js";
 import { mulberry32, jitter, hex, SEED_NUMBER } from "./rng.js";
@@ -186,13 +186,13 @@ export function buildWorld(file: string): WorldStats {
 
     db.close();
 
-    // Atomic rename: replace destination only after successful build + validation
-    if (existsSync(file)) rmSync(file);
+    // Atomic replace: rename() on POSIX atomically replaces destination if it exists.
+    // Do NOT delete the destination first — that would leave a gap where no DB exists.
     renameSync(tmpFile, file);
 
     return stats;
   } catch (err) {
-    // Cleanup temp file on failure
+    // Cleanup temp file on failure; original destination is untouched
     try {
       if (existsSync(tmpFile)) rmSync(tmpFile);
     } catch {

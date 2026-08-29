@@ -18,11 +18,11 @@ export const deployStats = {
     description:
       "Error-rate and latency aggregates for one deploy's service. " +
       "Mode 'pre-post' (default): window before vs window after deploy start. " +
-      "Mode 'recent': last N hours from scenario time (use after rollback to see recovery).",
+      "Mode 'recent': last N hours from the latest available metric (includes recovery rows).",
     inputSchema: {
       id: z.string().describe("Deploy id"),
       windowHours: z.number().min(1).max(12).default(3).describe("Window size in hours"),
-      mode: z.enum(["pre-post", "recent"]).default("pre-post").describe("pre-post: around deploy start; recent: trailing window from scenario time"),
+      mode: z.enum(["pre-post", "recent"]).default("pre-post").describe("pre-post: around deploy start; recent: trailing window from latest metric"),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -53,8 +53,12 @@ export const deployStats = {
 
       let pre: Agg, post: Agg;
       if (mode === "recent") {
-        // Recent mode: trailing window from scenario time (includes recovery metrics)
-        const to = SCENARIO_NOW;
+        // Recent mode: use the latest metric timestamp as the anchor (includes recovery rows)
+        const latestRow = db
+          .prepare(`SELECT MAX(ts) AS max_ts FROM metrics WHERE service = ?`)
+          .get(dep.service) as { max_ts: string } | undefined;
+        const latestTs = latestRow?.max_ts ? Date.parse(latestRow.max_ts) : SCENARIO_NOW;
+        const to = latestTs + HOUR_MS; // exclusive upper bound after latest bucket
         const from = to - w;
         pre = agg(from - w, from); // baseline window before recent
         post = agg(from, to);       // recent window (includes any recovery)

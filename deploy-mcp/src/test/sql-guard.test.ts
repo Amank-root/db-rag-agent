@@ -22,6 +22,22 @@ test("caps LIMIT at MAX_ROWS even with large value", () => {
   assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
 });
 
+test("does not cap LIMIT inside string literal", () => {
+  // The literal 'LIMIT 10000' should not be mistaken for a real LIMIT clause
+  const { normalized } = assertReadOnlySql("SELECT * FROM alerts WHERE title LIKE '%LIMIT 10000%'");
+  // Should append LIMIT 500 since there's no real LIMIT clause
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+});
+
+test("caps real LIMIT even when literal LIMIT appears earlier", () => {
+  // Real LIMIT 10000 should be capped to 500, literal 'LIMIT 99999' should be preserved
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys WHERE note = 'LIMIT 99999' LIMIT 10000");
+  // Real LIMIT clause should be capped
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+  // Literal should be preserved
+  assert.ok(normalized.includes("'LIMIT 99999'"), "String literal should be preserved");
+});
+
 test("allows WITH (read-only CTE)", () => {
   assert.doesNotThrow(() => assertReadOnlySql("WITH x AS (SELECT 1 AS n) SELECT n FROM x"));
 });
