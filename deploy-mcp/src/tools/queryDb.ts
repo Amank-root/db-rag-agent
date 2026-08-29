@@ -23,7 +23,13 @@ export const queryDb = {
       const db = openWorld({ readOnly: true }); // hard enforcement at connection level
       try {
         const rows = db.prepare(normalized).all();
-        return textResult({ ok: true, rowCount: rows.length, rows });
+        // Safety net: post-execution truncation if LIMIT was bypassed somehow
+        let truncated = false;
+        if (rows.length > MAX_ROWS) {
+          truncated = true;
+          rows.length = MAX_ROWS;
+        }
+        return textResult({ ok: true, rowCount: rows.length, rows, truncated });
       } finally {
         db.close();
       }

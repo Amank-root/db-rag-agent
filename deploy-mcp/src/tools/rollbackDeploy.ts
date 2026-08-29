@@ -1,13 +1,81 @@
 import { z } from "zod";
 import { openWorld } from "../world.js";
 import { textResult, iso, HOUR_MS } from "../shared.js";
+import { CULPRIT_DEPLOY_ID } from "../seed/scenario.js";
+
+/** Services affected by the culprit deploy (cascading failure). */
+const CASCADE_SERVICES: Record<string, string[]> = {
+  "checkout-api": ["payment-gateway"],
+};
+
+function simulateRecovery(
+  db: ReturnType<typeof openWorld>,
+  service: string,
+  now: string,
+): boolean {
+  const last = db
+    .prepare(
+      `SELECT ts, errors * 1.0 / NULLIF(requests, 0) AS er, p99_ms, requests
+         FROM metrics WHERE service = ? ORDER BY ts DESC LIMIT 1`,
+    )
+    .get(service) as
+    | { ts: string; er: number | null; p99_ms: number; requests: number }
+    | undefined;
+  const base = db
+    .prepare(
+      `SELECT AVG(er) AS er, AVG(p99) AS p99 FROM (
+         SELECT errors * 1.0 / NULLIF(requests, 0) AS er, p99_ms AS p99
+           FROM metrics WHERE service = ? ORDER BY ts ASC LIMIT 48)`,
+    )
+    .get(service) as { er: number | null; p99: number | null } | undefined;
+
+  if (
+    !last ||
+    !base ||
+    last.er === null ||
+    base.er === null ||
+    base.p99 === null ||
+    last.er <= 2 * base.er
+  ) {
+    return false;
+  }
+
+  const endpointRow = db
+    .prepare(`SELECT endpoint FROM metrics WHERE service = ? LIMIT 1`)
+    .get(service) as { endpoint: string } | undefined;
+  if (!endpointRow) return false;
+
+  const ins = db.prepare(
+    `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  let t = Date.parse(last.ts) + HOUR_MS;
+  for (const s of [
+    { f: 0.45, p: 0.5 },
+    { f: 0.15, p: 0.2 },
+    { f: 0, p: 0 },
+  ]) {
+    const er = base.er + (last.er - base.er) * s.f;
+    const p99 = base.p99 + (last.p99_ms - base.p99) * s.p;
+    ins.run(
+      iso(t),
+      service,
+      endpointRow.endpoint,
+      last.requests,
+      Math.max(0, Math.round(last.requests * er)),
+      Math.round(p99 * 10) / 10,
+    );
+    t += HOUR_MS;
+  }
+  return true;
+}
 
 export const rollbackDeploy = {
   name: "rollback_deploy",
   config: {
     title: "Rollback deploy (IRREVERSIBLE)",
     description:
-      "Marks a deploy rolled back and simulates recovery metrics. IRREVERSIBLE — approval-gated by " +
+      "Marks a deploy rolled back and simulates recovery metrics for the culprit service and its cascade. IRREVERSIBLE — approval-gated by " +
       "TrueForge. The agent MUST present findings and wait for explicit human approval before calling this.",
     inputSchema: {
       id: z.string().describe("Deploy id to roll back"),
@@ -39,62 +107,17 @@ export const rollbackDeploy = {
         `deploy ${args.id} (${dep.service}) rolled back — reason: ${args.reason}`,
       );
 
-      // Simulate recovery: 3 hourly buckets decaying toward baseline — only if the
-      // service is actually degraded (never fabricate change for innocent deploys).
-      let recoverySimulated = false;
-      const last = db
-        .prepare(
-          `SELECT ts, errors * 1.0 / NULLIF(requests, 0) AS er, p99_ms, requests
-             FROM metrics WHERE service = ? ORDER BY ts DESC LIMIT 1`,
-        )
-        .get(dep.service) as
-        | { ts: string; er: number | null; p99_ms: number; requests: number }
-        | undefined;
-      const base = db
-        .prepare(
-          `SELECT AVG(er) AS er, AVG(p99) AS p99 FROM (
-             SELECT errors * 1.0 / NULLIF(requests, 0) AS er, p99_ms AS p99
-               FROM metrics WHERE service = ? ORDER BY ts ASC LIMIT 48)`,
-        )
-        .get(dep.service) as { er: number | null; p99: number | null } | undefined;
+      // Simulate recovery for the culprit service
+      let recoverySimulated = simulateRecovery(db, dep.service, now);
 
-      if (
-        last &&
-        base &&
-        last.er !== null &&
-        base.er !== null &&
-        base.p99 !== null &&
-        last.er > 2 * base.er
-      ) {
-        const endpointRow = db
-          .prepare(`SELECT endpoint FROM metrics WHERE service = ? LIMIT 1`)
-          .get(dep.service) as { endpoint: string } | undefined;
-        if (endpointRow) {
-          const ins = db.prepare(
-            `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          );
-          let t = Date.parse(last.ts) + HOUR_MS;
-          for (const s of [
-            { f: 0.45, p: 0.5 },
-            { f: 0.15, p: 0.2 },
-            { f: 0, p: 0 }, // fully back to baseline
-          ]) {
-            const er = base.er + (last.er - base.er) * s.f;
-            const p99 = base.p99 + (last.p99_ms - base.p99) * s.p;
-            ins.run(
-              iso(t),
-              dep.service,
-              endpointRow.endpoint,
-              last.requests,
-              Math.max(0, Math.round(last.requests * er)),
-              Math.round(p99 * 10) / 10,
-            );
-            t += HOUR_MS;
-          }
+      // Also simulate recovery for cascaded services (e.g., payment-gateway when culprit is checkout-api)
+      const cascaded = CASCADE_SERVICES[dep.service] ?? [];
+      for (const svc of cascaded) {
+        if (simulateRecovery(db, svc, now)) {
           recoverySimulated = true;
         }
       }
+
       db.exec("COMMIT");
 
       return textResult({
@@ -104,7 +127,7 @@ export const rollbackDeploy = {
         rolled_back_at: now,
         recovery_simulated: recoverySimulated,
         next: recoverySimulated
-          ? "Three hourly recovery buckets were appended. Verify with deploy_stats or query_db and report the trend."
+          ? "Three hourly recovery buckets were appended for culprit and cascaded services. Verify with deploy_stats or query_db and report the trend."
           : "No degradation was present to recover from.",
       });
     } catch (err) {
