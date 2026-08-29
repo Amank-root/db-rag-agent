@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, renameSync, copyFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { HOUR_MS, iso } from "../shared.js";
 import { mulberry32, jitter, hex, SEED_NUMBER } from "./rng.js";
@@ -81,7 +81,7 @@ export interface WorldStats {
 export function buildWorld(file: string): WorldStats {
   mkdirSync(path.dirname(file), { recursive: true });
 
-  // Build into a temporary sibling file first, then atomically rename
+  // Build into a temporary sibling file first, then atomically replace
   const tmpFile = `${file}.tmp`;
   if (existsSync(tmpFile)) rmSync(tmpFile);
 
@@ -186,9 +186,10 @@ export function buildWorld(file: string): WorldStats {
 
     db.close();
 
-    // Atomic replace: rename() on POSIX atomically replaces destination if it exists.
-    // Do NOT delete the destination first — that would leave a gap where no DB exists.
-    renameSync(tmpFile, file);
+    // Cross-platform atomic replace:
+    // - POSIX: rename() atomically overwrites destination
+    // - Windows: rename() fails if destination exists; use copy+unlink with retry
+    atomicReplace(tmpFile, file);
 
     return stats;
   } catch (err) {
@@ -205,4 +206,60 @@ export function buildWorld(file: string): WorldStats {
     }
     throw err;
   }
+}
+
+/**
+ * Atomically replace destination file with source file.
+ * On POSIX: rename() is atomic and overwrites.
+ * On Windows: rename() fails if destination exists; retry with copy+unlink.
+ * Retries with backoff to handle brief file locks (e.g., antivirus, backup).
+ */
+function atomicReplace(src: string, dest: string): void {
+  try {
+    // Fast path: POSIX atomic rename
+    renameSync(src, dest);
+    return;
+  } catch (err: any) {
+    // On Windows, rename fails with EPERM/EBUSY if destination exists.
+    // Also handle cross-device errors (EXDEV) which can happen on some setups.
+    const isWindows = process.platform === "win32";
+    const isRetryable = isWindows && (err.code === "EPERM" || err.code === "EBUSY" || err.code === "EACCES");
+
+    if (!isRetryable) {
+      // Non-retryable error (e.g., EXDEV cross-device, permissions)
+      throw err;
+    }
+  }
+
+  // Windows fallback: copy + unlink with retry/backoff
+  // This handles the case where destination is briefly locked by another process.
+  const maxRetries = 10;
+  const baseDelayMs = 50;
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // Copy source to destination (overwrites on Windows)
+      copyFileSync(src, dest);
+      // Remove source
+      unlinkSync(src);
+      return;
+    } catch (err: any) {
+      lastError = err;
+      // If destination is locked, wait and retry
+      if (err.code === "EPERM" || err.code === "EBUSY" || err.code === "EACCES") {
+        const delay = baseDelayMs * Math.pow(2, attempt); // exponential backoff
+        // eslint-disable-next-line no-await-in-loop
+        // Using synchronous sleep via Atomics.wait on a shared buffer
+        const buffer = new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(buffer, 0, 0, delay);
+        continue;
+      }
+      // Non-retryable error
+      throw err;
+    }
+  }
+
+  // All retries exhausted
+  throw new Error(`atomicReplace failed after ${maxRetries} attempts: ${lastError?.message}`);
 }

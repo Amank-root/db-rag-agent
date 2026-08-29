@@ -38,6 +38,60 @@ test("caps real LIMIT even when literal LIMIT appears earlier", () => {
   assert.ok(normalized.includes("'LIMIT 99999'"), "String literal should be preserved");
 });
 
+test("masks LIMIT inside line comment", () => {
+  // LIMIT in -- comment should not be mistaken for real LIMIT
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys -- LIMIT 10000");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+});
+
+test("masks LIMIT inside block comment", () => {
+  // LIMIT in /* comment */ should not be mistaken for real LIMIT
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys /* LIMIT 10000 */");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+});
+
+test("real LIMIT after comment is capped, comment LIMIT preserved", () => {
+  // Real LIMIT after comment should be capped, comment LIMIT remains as comment text
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys -- LIMIT 10000\nLIMIT 10000");
+  // The real LIMIT should be capped
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}`));
+  // The comment LIMIT should still be in the comment
+  assert.ok(normalized.includes("-- LIMIT 10000"), "Comment should be preserved");
+  // Should have two LIMIT occurrences: one in comment, one real (capped)
+  const limitCount = (normalized.match(/LIMIT/gi) || []).length;
+  assert.equal(limitCount, 2, "Should have LIMIT in comment + capped real LIMIT");
+});
+
+test("handles LIMIT count OFFSET offset", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 100 OFFSET 50");
+  assert.equal(normalized, "SELECT * FROM deploys LIMIT 100 OFFSET 50");
+});
+
+test("caps LIMIT count OFFSET offset when count exceeds ceiling", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 1000 OFFSET 200");
+  assert.match(normalized, /LIMIT 500 OFFSET 200$/);
+});
+
+test("caps OFFSET when it exceeds ceiling", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 100 OFFSET 1000");
+  assert.match(normalized, /LIMIT 100 OFFSET 500$/);
+});
+
+test("handles LIMIT offset, count (comma form)", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 50, 100");
+  assert.equal(normalized, "SELECT * FROM deploys LIMIT 50, 100");
+});
+
+test("caps LIMIT offset, count (comma form) when count exceeds ceiling", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 50, 1000");
+  assert.match(normalized, /LIMIT 50, 500$/);
+});
+
+test("caps OFFSET in comma form when it exceeds ceiling", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 1000, 100");
+  assert.match(normalized, /LIMIT 500, 100$/);
+});
+
 test("allows WITH (read-only CTE)", () => {
   assert.doesNotThrow(() => assertReadOnlySql("WITH x AS (SELECT 1 AS n) SELECT n FROM x"));
 });
