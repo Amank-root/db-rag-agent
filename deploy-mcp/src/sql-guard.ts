@@ -26,8 +26,20 @@ export function assertReadOnlySql(sql: string): { normalized: string } {
     throw new Error(`Forbidden keyword in read-only query: ${hit[1].toUpperCase()}`);
   }
 
-  const normalized = /\blimit\s+\d+/i.test(noStrings)
-    ? trimmed
-    : `${trimmed}\nLIMIT ${MAX_ROWS}`;
+  // Enforce MAX_ROWS ceiling on any LIMIT clause
+  const limitMatch = noStrings.match(/\bLIMIT\s+(\d+)/i);
+  let normalized: string;
+  if (limitMatch) {
+    const requestedLimit = parseInt(limitMatch[1], 10);
+    const cappedLimit = Math.min(requestedLimit, MAX_ROWS);
+    if (requestedLimit > MAX_ROWS) {
+      // Replace the LIMIT value with capped value
+      normalized = trimmed.replace(/\bLIMIT\s+\d+/i, `LIMIT ${cappedLimit}`);
+    } else {
+      normalized = trimmed;
+    }
+  } else {
+    normalized = `${trimmed}\nLIMIT ${MAX_ROWS}`;
+  }
   return { normalized };
 }

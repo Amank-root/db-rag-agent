@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, renameSync } from "node:fs";
 import path from "node:path";
 import { HOUR_MS, iso } from "../shared.js";
 import { mulberry32, jitter, hex, SEED_NUMBER } from "./rng.js";
@@ -80,99 +80,129 @@ export interface WorldStats {
 /** Idempotent by construction: always rebuilds the same deterministic world. */
 export function buildWorld(file: string): WorldStats {
   mkdirSync(path.dirname(file), { recursive: true });
-  if (existsSync(file)) rmSync(file);
-  const db = new DatabaseSync(file);
-  db.exec(SCHEMA);
-  const rnd = mulberry32(SEED_NUMBER);
 
-  db.exec("BEGIN");
+  // Build into a temporary sibling file first, then atomically rename
+  const tmpFile = `${file}.tmp`;
+  if (existsSync(tmpFile)) rmSync(tmpFile);
 
-  // --- deploys ---------------------------------------------------------------
-  const versionCounters = new Map<string, number>();
-  const insertDeploy = db.prepare(
-    `INSERT INTO deploys (id, service, version, commit_sha, title, author, started_at, finished_at, status, rolled_back, rolled_back_at, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`,
-  );
-  for (const d of DEPLOY_PLAN) {
-    const n = (versionCounters.get(d.service) ?? 0) + 1;
-    versionCounters.set(d.service, n);
-    const start = SCENARIO_NOW - d.hoursAgo * HOUR_MS;
-    insertDeploy.run(
-      d.id,
-      d.service,
-      `v2.${n}.0`,
-      d.commit ?? hex(rnd, 7),
-      d.title,
-      d.author,
-      iso(start),
-      iso(start + 14 * 60_000),
-      d.status ?? "succeeded",
-      d.notes ?? null,
+  const db = new DatabaseSync(tmpFile);
+  try {
+    db.exec(SCHEMA);
+    const rnd = mulberry32(SEED_NUMBER);
+
+    db.exec("BEGIN");
+
+    // --- deploys ---------------------------------------------------------------
+    const versionCounters = new Map<string, number>();
+    const insertDeploy = db.prepare(
+      `INSERT INTO deploys (id, service, version, commit_sha, title, author, started_at, finished_at, status, rolled_back, rolled_back_at, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`,
     );
-  }
-
-  // --- alerts ----------------------------------------------------------------
-  const insertAlert = db.prepare(
-    `INSERT INTO alerts (id, name, source, service, severity, title, status, created_at, payload_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const a of ALERT_PLAN) {
-    insertAlert.run(
-      a.id,
-      a.name,
-      a.source,
-      a.service,
-      a.severity,
-      a.title,
-      a.status,
-      iso(SCENARIO_NOW - a.hoursAgo * HOUR_MS + a.minuteOffset * 60_000),
-      JSON.stringify(a.payload),
-    );
-  }
-
-  // --- metrics (hourly buckets, ts = bucket start) ---------------------------
-  const insertMetric = db.prepare(
-    `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms) VALUES (?, ?, ?, ?, ?, ?)`,
-  );
-  for (let h = WINDOW_HOURS; h >= 1; h--) {
-    const ts = SCENARIO_NOW - h * HOUR_MS;
-    for (const [service, p] of Object.entries(SERVICES)) {
-      let err = p.err;
-      let p99 = p.p99;
-
-      if (service === "checkout-api") {
-        if (ts === culpritStartMs) {
-          err = 0.042; // partial bucket while the rollout completes
-          p99 = 1300;
-        } else if (ts > culpritStartMs) {
-          err = jitter(rnd, 0.105, 0.15);
-          p99 = jitter(rnd, 2700, 0.12);
-        }
-      } else if (service === "payment-gateway") {
-        if (ts > culpritStartMs) {
-          // cascade: checkout timeouts surface as payment failures ~1 bucket later
-          err = jitter(rnd, 0.064, 0.15);
-          p99 = jitter(rnd, 1150, 0.12);
-        }
-      } else if (service === "inventory-svc" && h >= 68 && h <= 70) {
-        err = p.err * 3.2; // blip behind resolved alert alrt-0482
-        p99 = p.p99 * 2.1;
-      }
-
-      const requests = Math.round(jitter(rnd, p.rph, 0.08));
-      const errors = Math.max(0, Math.round(requests * err));
-      insertMetric.run(iso(ts), service, p.endpoint, requests, errors, Math.round(p99 * 10) / 10);
+    for (const d of DEPLOY_PLAN) {
+      const n = (versionCounters.get(d.service) ?? 0) + 1;
+      versionCounters.set(d.service, n);
+      const start = SCENARIO_NOW - d.hoursAgo * HOUR_MS;
+      insertDeploy.run(
+        d.id,
+        d.service,
+        `v2.${n}.0`,
+        d.commit ?? hex(rnd, 7),
+        d.title,
+        d.author,
+        iso(start),
+        iso(start + 14 * 60_000),
+        d.status ?? "succeeded",
+        d.notes ?? null,
+      );
     }
+
+    // --- alerts ----------------------------------------------------------------
+    const insertAlert = db.prepare(
+      `INSERT INTO alerts (id, name, source, service, severity, title, status, created_at, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const a of ALERT_PLAN) {
+      insertAlert.run(
+        a.id,
+        a.name,
+        a.source,
+        a.service,
+        a.severity,
+        a.title,
+        a.status,
+        iso(SCENARIO_NOW - a.hoursAgo * HOUR_MS + a.minuteOffset * 60_000),
+        JSON.stringify(a.payload),
+      );
+    }
+
+    // --- metrics (hourly buckets, ts = bucket start) ---------------------------
+    const insertMetric = db.prepare(
+      `INSERT INTO metrics (ts, service, endpoint, requests, errors, p99_ms) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (let h = WINDOW_HOURS; h >= 1; h--) {
+      const ts = SCENARIO_NOW - h * HOUR_MS;
+      for (const [service, p] of Object.entries(SERVICES)) {
+        let err = p.err;
+        let p99 = p.p99;
+
+        if (service === "checkout-api") {
+          if (ts === culpritStartMs) {
+            err = 0.042; // partial bucket while the rollout completes
+            p99 = 1300;
+          } else if (ts > culpritStartMs) {
+            err = jitter(rnd, 0.105, 0.15);
+            p99 = jitter(rnd, 2700, 0.12);
+          }
+        } else if (service === "payment-gateway") {
+          if (ts > culpritStartMs) {
+            // cascade: checkout timeouts surface as payment failures ~1 bucket later
+            err = jitter(rnd, 0.064, 0.15);
+            p99 = jitter(rnd, 1150, 0.12);
+          }
+        } else if (service === "inventory-svc" && h >= 68 && h <= 70) {
+          err = p.err * 3.2; // blip behind resolved alert alrt-0482
+          p99 = p.p99 * 2.1;
+        }
+
+        const requests = Math.round(jitter(rnd, p.rph, 0.08));
+        const errors = Math.max(0, Math.round(requests * err));
+        insertMetric.run(iso(ts), service, p.endpoint, requests, errors, Math.round(p99 * 10) / 10);
+      }
+    }
+
+    db.prepare(`INSERT INTO events (ts, kind, detail) VALUES (?, 'seed', ?)`).run(
+      iso(SCENARIO_NOW),
+      `deterministic world built — anchor ${iso(SCENARIO_NOW)}, seed 0x${SEED_NUMBER.toString(16)}`,
+    );
+    db.exec("COMMIT");
+
+    const c = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+    const stats = { deploys: c("deploys"), alerts: c("alerts"), metrics: c("metrics") };
+
+    // Validate the built world before replacing
+    if (stats.deploys === 0 || stats.alerts === 0 || stats.metrics === 0) {
+      throw new Error(`Validation failed: deploys=${stats.deploys} alerts=${stats.alerts} metrics=${stats.metrics}`);
+    }
+
+    db.close();
+
+    // Atomic rename: replace destination only after successful build + validation
+    if (existsSync(file)) rmSync(file);
+    renameSync(tmpFile, file);
+
+    return stats;
+  } catch (err) {
+    // Cleanup temp file on failure
+    try {
+      if (existsSync(tmpFile)) rmSync(tmpFile);
+    } catch {
+      /* ignore cleanup errors */
+    }
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+    throw err;
   }
-
-  db.prepare(`INSERT INTO events (ts, kind, detail) VALUES (?, 'seed', ?)`).run(
-    iso(SCENARIO_NOW),
-    `deterministic world built — anchor ${iso(SCENARIO_NOW)}, seed 0x${SEED_NUMBER.toString(16)}`,
-  );
-  db.exec("COMMIT");
-
-  const c = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
-  const stats = { deploys: c("deploys"), alerts: c("alerts"), metrics: c("metrics") };
-  db.close();
-  return stats;
 }

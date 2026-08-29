@@ -22,17 +22,24 @@ export const writeBack = {
     try {
       JSON.parse(args.resultJson); // fail fast on malformed JSON before writing
       const now = new Date().toISOString();
-      const res = db
-        .prepare(
-          `INSERT INTO analysis_results (created_at, question, sql, result_json, summary)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(now, args.question, args.sql, args.resultJson, args.resultSummary);
-      db.prepare(`INSERT INTO events (ts, kind, detail) VALUES (?, 'write_back', ?)`).run(
-        now,
-        `analysis #${res.lastInsertRowid} persisted: ${args.question}`,
-      );
-      return textResult({ ok: true, analysis_id: Number(res.lastInsertRowid), stored_at: now });
+      db.exec("BEGIN");
+      try {
+        const res = db
+          .prepare(
+            `INSERT INTO analysis_results (created_at, question, sql, result_json, summary)
+             VALUES (?, ?, ?, ?, ?)`,
+          )
+          .run(now, args.question, args.sql, args.resultJson, args.resultSummary);
+        db.prepare(`INSERT INTO events (ts, kind, detail) VALUES (?, 'write_back', ?)`).run(
+          now,
+          `analysis #${res.lastInsertRowid} persisted: ${args.question}`,
+        );
+        db.exec("COMMIT");
+        return textResult({ ok: true, analysis_id: Number(res.lastInsertRowid), stored_at: now });
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
     } catch (err) {
       return textResult({ ok: false, error: (err as Error).message });
     } finally {

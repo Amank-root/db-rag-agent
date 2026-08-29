@@ -40,23 +40,19 @@ async function main() {
     readFileSync(join(ROOT, "agent.json"), "utf-8")
   );
 
-  // Check if agent already exists
+  // Check if agent already exists - only fall through to creation if not found
   let agent;
-  try {
-    const agentsResponse = await client.agents.list();
-    const agents = agentsResponse.data;
-    const existing = agents.find((a) => a.name === AGENT_NAME);
-    if (existing) {
-      console.log(`[create-agent] Agent "${AGENT_NAME}" already exists (id: ${existing.id})`);
-      console.log("[create-agent] Updating manifest...");
-      const updateResponse = await client.agents.update(existing.id, { manifest: agentManifest });
-      agent = updateResponse.data;
-      console.log(`[create-agent] Updated agent: ${agent.id}`);
-    } else {
-      throw new Error("not found");
-    }
-  } catch {
-    // Create new agent
+  const agentsResponse = await client.agents.list();
+  const agents = agentsResponse.data;
+  const existing = agents.find((a) => a.name === AGENT_NAME);
+  
+  if (existing) {
+    console.log(`[create-agent] Agent "${AGENT_NAME}" already exists (id: ${existing.id})`);
+    console.log("[create-agent] Updating manifest...");
+    const updateResponse = await client.agents.update(existing.id, { manifest: agentManifest });
+    agent = updateResponse.data;
+    console.log(`[create-agent] Updated agent: ${agent.id}`);
+  } else {
     console.log(`[create-agent] Creating agent "${AGENT_NAME}"...`);
     const createResponse = await client.agents.create({
       name: AGENT_NAME,

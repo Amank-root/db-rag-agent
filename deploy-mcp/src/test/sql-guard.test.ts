@@ -7,9 +7,19 @@ test("allows plain SELECT and appends LIMIT", () => {
   assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
 });
 
-test("keeps existing LIMIT", () => {
+test("keeps existing LIMIT under ceiling", () => {
   const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 10");
   assert.equal(normalized, "SELECT * FROM deploys LIMIT 10");
+});
+
+test("caps LIMIT at MAX_ROWS ceiling", () => {
+  const { normalized } = assertReadOnlySql(`SELECT * FROM deploys LIMIT ${MAX_ROWS + 100}`);
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+});
+
+test("caps LIMIT at MAX_ROWS even with large value", () => {
+  const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 10000");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
 });
 
 test("allows WITH (read-only CTE)", () => {
