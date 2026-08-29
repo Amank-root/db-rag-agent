@@ -69,12 +69,14 @@ test("handles LIMIT count OFFSET offset", () => {
 
 test("caps LIMIT count OFFSET offset when count exceeds ceiling", () => {
   const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 1000 OFFSET 200");
+  // OFFSET should be preserved, only count capped
   assert.match(normalized, /LIMIT 500 OFFSET 200$/);
 });
 
-test("caps OFFSET when it exceeds ceiling", () => {
+test("preserves OFFSET when it exceeds ceiling (OFFSET does not increase row count)", () => {
   const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 100 OFFSET 1000");
-  assert.match(normalized, /LIMIT 100 OFFSET 500$/);
+  // OFFSET should be preserved as-is, only count capped if it exceeds
+  assert.match(normalized, /LIMIT 100 OFFSET 1000$/);
 });
 
 test("handles LIMIT offset, count (comma form)", () => {
@@ -84,12 +86,58 @@ test("handles LIMIT offset, count (comma form)", () => {
 
 test("caps LIMIT offset, count (comma form) when count exceeds ceiling", () => {
   const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 50, 1000");
+  // OFFSET (50) preserved, count capped
   assert.match(normalized, /LIMIT 50, 500$/);
 });
 
-test("caps OFFSET in comma form when it exceeds ceiling", () => {
+test("preserves OFFSET in comma form when it exceeds ceiling (OFFSET does not increase row count)", () => {
   const { normalized } = assertReadOnlySql("SELECT * FROM deploys LIMIT 1000, 100");
-  assert.match(normalized, /LIMIT 500, 100$/);
+  // OFFSET (1000) preserved, count (100) unchanged since under ceiling
+  assert.match(normalized, /LIMIT 1000, 100$/);
+});
+
+// Nested LIMIT detection tests
+test("appends LIMIT when CTE has inner LIMIT but outer query does not", () => {
+  // Inner LIMIT in CTE should not prevent appending LIMIT to outer query
+  const { normalized } = assertReadOnlySql("WITH x AS (SELECT * FROM deploys LIMIT 10) SELECT * FROM x");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+});
+
+test("caps outer LIMIT when CTE has inner LIMIT", () => {
+  // Outer LIMIT should be capped even if CTE has its own LIMIT
+  const { normalized } = assertReadOnlySql("WITH x AS (SELECT * FROM deploys LIMIT 10) SELECT * FROM x LIMIT 10000");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+  // Inner LIMIT (10) should be preserved
+  assert.ok(normalized.includes("LIMIT 10"), "CTE inner LIMIT should be preserved");
+});
+
+test("ignores LIMIT in subquery, caps outer LIMIT", () => {
+  // LIMIT in subquery should not be treated as outer LIMIT
+  const { normalized } = assertReadOnlySql("SELECT * FROM (SELECT * FROM deploys LIMIT 100) LIMIT 10000");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+  // Inner LIMIT should be preserved
+  assert.ok(normalized.includes("LIMIT 100"), "Subquery inner LIMIT should be preserved");
+});
+
+test("ignores LIMIT in nested CTE, caps outer LIMIT", () => {
+  // Multiple levels of nesting - only outermost LIMIT should be capped
+  const { normalized } = assertReadOnlySql("WITH a AS (WITH b AS (SELECT * FROM deploys LIMIT 5) SELECT * FROM b LIMIT 10) SELECT * FROM a LIMIT 10000");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+  // Inner LIMITs should be preserved
+  assert.ok(normalized.includes("LIMIT 5"), "Deepest CTE LIMIT should be preserved");
+  assert.ok(normalized.includes("LIMIT 10"), "Middle CTE LIMIT should be preserved");
+});
+
+test("allows CTE with LIMIT but no outer LIMIT", () => {
+  // CTE with LIMIT, outer query without LIMIT should get LIMIT appended
+  const { normalized } = assertReadOnlySql("WITH x AS (SELECT * FROM deploys LIMIT 50) SELECT * FROM x");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
+});
+
+test("allows subquery with LIMIT but no outer LIMIT", () => {
+  // Subquery with LIMIT, outer query without LIMIT should get LIMIT appended
+  const { normalized } = assertReadOnlySql("SELECT * FROM (SELECT * FROM deploys LIMIT 20)");
+  assert.match(normalized, new RegExp(`LIMIT ${MAX_ROWS}$`));
 });
 
 test("allows WITH (read-only CTE)", () => {

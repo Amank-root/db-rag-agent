@@ -81,9 +81,9 @@ export interface WorldStats {
 export function buildWorld(file: string): WorldStats {
   mkdirSync(path.dirname(file), { recursive: true });
 
-  // Build into a temporary sibling file first, then atomically replace
-  const tmpFile = `${file}.tmp`;
-  if (existsSync(tmpFile)) rmSync(tmpFile);
+  // Build into a unique temporary sibling file per invocation to avoid races
+  const uniqueSuffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const tmpFile = `${file}.tmp.${uniqueSuffix}`;
 
   const db = new DatabaseSync(tmpFile);
   try {
@@ -213,6 +213,8 @@ export function buildWorld(file: string): WorldStats {
  * On POSIX: rename() is atomic and overwrites.
  * On Windows: rename() fails if destination exists; retry with copy+unlink.
  * Retries with backoff to handle brief file locks (e.g., antivirus, backup).
+ * Once the destination copy succeeds, failure to delete the temporary source
+ * does NOT fail the replacement - cleanup is best-effort.
  */
 function atomicReplace(src: string, dest: string): void {
   try {
@@ -236,30 +238,43 @@ function atomicReplace(src: string, dest: string): void {
   const maxRetries = 10;
   const baseDelayMs = 50;
   let lastError: Error | undefined;
+  let copySucceeded = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      // Copy source to destination (overwrites on Windows)
-      copyFileSync(src, dest);
-      // Remove source
+      if (!copySucceeded) {
+        // Copy source to destination (overwrites on Windows)
+        copyFileSync(src, dest);
+        copySucceeded = true;
+      }
+      // Remove source - if this fails after copy succeeded, don't retry
       unlinkSync(src);
       return;
     } catch (err: any) {
       lastError = err;
-      // If destination is locked, wait and retry
-      if (err.code === "EPERM" || err.code === "EBUSY" || err.code === "EACCES") {
+      // If copy hasn't succeeded yet and destination is locked, wait and retry
+      if (!copySucceeded && (err.code === "EPERM" || err.code === "EBUSY" || err.code === "EACCES")) {
         const delay = baseDelayMs * Math.pow(2, attempt); // exponential backoff
-        // eslint-disable-next-line no-await-in-loop
         // Using synchronous sleep via Atomics.wait on a shared buffer
         const buffer = new Int32Array(new SharedArrayBuffer(4));
         Atomics.wait(buffer, 0, 0, delay);
         continue;
       }
-      // Non-retryable error
+      // If copy succeeded but cleanup failed, destination is valid - return success
+      if (copySucceeded) {
+        // Cleanup of temporary source will be attempted on next run or manually
+        return;
+      }
+      // Non-retryable error before copy succeeded
       throw err;
     }
   }
 
   // All retries exhausted
+  // If copy succeeded but cleanup failed, destination is valid - don't throw
+  if (copySucceeded) {
+    // Cleanup of temporary source will be attempted on next run or manually
+    return;
+  }
   throw new Error(`atomicReplace failed after ${maxRetries} attempts: ${lastError?.message}`);
 }
