@@ -1,0 +1,36 @@
+{
+  "name": "deploy-mcp",
+  "version": "1.0.0",
+  "description": "Self-contained MCP world (deploys, alerts, metrics) for Deploy Detective — deterministic seed data, read-only SQL, approval-gated write tools.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "deploy-mcp": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "preseed": "npm run build",
+    "seed": "node dist/seed/seed.js",
+    "reseed": "npm run seed",
+    "pretest": "npm run build",
+    "test": "node --test dist/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "express": "^5.2.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

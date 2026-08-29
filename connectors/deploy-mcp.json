@@ -1,0 +1,8 @@
+{
+  "name": "deploy-mcp",
+  "description": "Self-contained deploy/alert/metrics world for Deploy Detective (stdio MCP).",
+  "transport": "stdio",
+  "command": "node",
+  "args": ["/workspaces/db-rag-agent/deploy-mcp/dist/server.js"],
+  "env": {}
+}
