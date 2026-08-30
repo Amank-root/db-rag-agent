@@ -8,6 +8,52 @@ Built for *The Agent Harness Hackathon* (WeMakeDevs × TrueFoundry × Qodo).
 
 ---
 
+## What does your project do?
+
+**Problem:** On-call engineers waste critical minutes manually querying deploys, alerts, and metrics to find the root cause of an incident — then must carefully roll back without breaking more. Data analysts face the same friction: write SQL, run it, verify results, then get approval before writing back or opening a PR.
+
+**Solution:** Deploy Detective (D2) is an approval-gated agent that mirrors a real on-call engineer across two loops:
+
+1. **Incident loop** — Given an alert, it pulls real data via MCP, fans out parallel subagents (deploys/alerts/metrics), runs a sandboxed Python bisect to compute the culprit deploy, then **pauses for human approval** before rolling back and verifying recovery.
+
+2. **Analytics loop** — Given a plain-English question, it writes and runs SQL in the sandbox, renders a chart, then **pauses for approval** before writing results back or opening a GitHub PR.
+
+**For:** On-call engineers, data analysts, and hackathon judges evaluating TrueForge's harness capabilities. Everything runs against a seeded, deterministic simulated world — no external accounts needed.
+
+---
+
+## How did you use TrueForge in your project?
+
+TrueForge is the **runtime harness** — the agent doesn't just "call an API"; TrueForge orchestrates the entire execution loop:
+
+| TrueForge capability | How D2 uses it |
+|---|---|
+| **MCP connectors** | Custom `deploy-mcp` (stdio) exposes 9 tools: `list_deploys`, `get_deploy`, `deploy_stats`, `list_alerts`, `get_alert`, `query_db` (read-only), `rollback_deploy`, `write_back`, `open_pr`. Built-in GitHub MCP provides real `create_pull_request`, `create_issue`, `search_code`. |
+| **Sandbox (Daytona)** | Agent writes and executes a Python bisect script in isolation; SQL runs in sandbox; charts rendered from real output. |
+| **Subagents** | Incident investigation fans out to 3 parallel subagents (deploys, alerts, metrics); summaries merged into one timeline. |
+| **Approvals** | Every write tool (`rollback_deploy`, `write_back`, `create_pull_request`) gated on human approval; read-only tools run freely. |
+| **Persistent sessions** | Investigation state survives page refresh/reconnect via TrueForge's session store. |
+| **Generative UI** | Analytics results rendered as tables + charts in chat. |
+| **Model-agnostic** | Swap providers (OpenAI, Anthropic, etc.) from UI without code changes. |
+
+The **approval-gate pause** is the centerpiece — visible in the 3-min demo (`demo/DEMO-SCRIPT.md`).
+
+---
+
+## How did you use Qodo in your project?
+
+Per hackathon requirements (FR-7), **all substantive changes flow through PRs reviewed by Qodo**:
+
+- **Workflow:** Branch → PR → `/agentic_review` → address findings → follow-up review → merge. Direct pushes to `main` blocked.
+- **Representative PR:** [#3 — deploy-mcp: implement all 9 tools with approval gating](https://github.com/amank-root/db-rag-agent/pull/3)
+- **High-severity findings fixed:** SQL injection guard (`sql-guard.ts`), idempotent seed logic.
+- **Medium findings resolved:** Test coverage gaps closed by adding `tools.test.ts` (42 tests now pass).
+- **Evidence:** [Qodo review thread](https://github.com/amank-root/db-rag-agent/pull/3#issuecomment-xxxxx) showing findings + follow-up review pass.
+
+Qodo caught security and correctness issues that manual review would miss, ensuring the custom MCP server and SQL guard are production-grade.
+
+---
+
 ## What D2 does
 
 D2 mirrors a real on-call engineer across two approval-gated loops:
@@ -101,6 +147,7 @@ The agent.json references it as `name: "github"` with `preload: false` and appro
 | Sandbox hiccup | Local fallback still runs the script; say "isolated execution" and move on |
 | Anything weird | `npm run reseed`, reload, retry. The world is deterministic. |
 | Qodo not responding | Verify GitHub app access; comment `/agentic_review` on PR |
+| Connectors not loading | Ensure `TRUEFORGE_DATA_DIR` is set and you ran `./scripts/setup.sh` first |
 
 ## Qodo Code Review Evidence
 
