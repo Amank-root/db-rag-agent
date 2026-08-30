@@ -13,13 +13,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/server.ts",
+    "dev": "tsx --env-file=.env src/server.ts",
     "start": "node dist/server.js",
     "preseed": "npm run build",
-    "seed": "node dist/seed/seed.js",
+    "seed": "node --env-file=.env dist/seed/seed.js",
     "reseed": "npm run seed",
     "pretest": "npm run build",
-    "test": "node --test dist/test/*.test.js",
+    "test": "node --test --env-file=.env dist/test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
