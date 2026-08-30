@@ -16,7 +16,7 @@ Built for *The Agent Harness Hackathon* (WeMakeDevs × TrueFoundry × Qodo).
 
 1. **Incident loop** — Given an alert, it pulls real data via MCP, fans out parallel subagents (deploys/alerts/metrics), runs a sandboxed Python bisect to compute the culprit deploy, then **pauses for human approval** before rolling back and verifying recovery.
 
-2. **Analytics loop** — Given a plain-English question, it writes and runs SQL in the sandbox, renders a chart, then **pauses for approval** before writing results back or opening a GitHub PR.
+2. **Analytics loop** — Given a plain-English question, it writes and runs SQL in the sandbox, renders a chart, then **pauses for approval** before writing results back or opening a PR.
 
 **For:** On-call engineers, data analysts, and hackathon judges evaluating TrueForge's harness capabilities. Everything runs against a seeded, deterministic simulated world — no external accounts needed.
 
@@ -28,10 +28,10 @@ TrueForge is the **runtime harness** — the agent doesn't just "call an API"; T
 
 | TrueForge capability | How D2 uses it |
 |---|---|
-| **MCP connectors** | Custom `deploy-mcp` (stdio) exposes 9 tools: `list_deploys`, `get_deploy`, `deploy_stats`, `list_alerts`, `get_alert`, `query_db` (read-only), `rollback_deploy`, `write_back`, `open_pr`. Built-in GitHub MCP provides real `create_pull_request`, `create_issue`, `search_code`. |
+| **MCP connectors** | A single custom `deploy-mcp` (stdio) server exposes all 9 tools D2 needs: `list_deploys`, `get_deploy`, `deploy_stats`, `list_alerts`, `get_alert`, `query_db` (read-only), plus `rollback_deploy`, `write_back`, `open_pr` (approval-gated writes). No external MCP servers or accounts required — even PR creation is simulated and recorded to a `pr_log` table inside the seeded world. |
 | **Sandbox (Daytona)** | Agent writes and executes a Python bisect script in isolation; SQL runs in sandbox; charts rendered from real output. |
 | **Subagents** | Incident investigation fans out to 3 parallel subagents (deploys, alerts, metrics); summaries merged into one timeline. |
-| **Approvals** | Every write tool (`rollback_deploy`, `write_back`, `create_pull_request`) gated on human approval; read-only tools run freely. |
+| **Approvals** | Every write tool (`rollback_deploy`, `write_back`, `open_pr`) is gated on human approval; read-only tools run freely. |
 | **Persistent sessions** | Investigation state survives page refresh/reconnect via TrueForge's session store. |
 | **Generative UI** | Analytics results rendered as tables + charts in chat. |
 | **Model-agnostic** | Swap providers (OpenAI, Anthropic, etc.) from UI without code changes. |
@@ -54,44 +54,183 @@ Qodo caught security and correctness issues that manual review would miss, ensur
 
 ---
 
-## What D2 does
-
-D2 mirrors a real on-call engineer across two approval-gated loops:
-
-**1. Incident loop** — `alert → investigate (MCP, read-only) → parallel subagents →
-sandbox bisect → culprit found → ⛔ APPROVAL GATE → rollback → verify recovery`
-
-**2. Analytics loop** — `plain-English question → agent writes SQL → runs in sandbox →
-chart (generative UI) → ⛔ APPROVAL GATE → write-back / PR`
-
-Everything runs against a **seeded, deterministic simulated world** — no external
-production accounts, so the demo never breaks and you can clone-and-run it.
-
-## How TrueForge does the work
-
-| TrueForge capability | Where D2 uses it |
-|---|---|
-| MCP connectors | `deploy-mcp` exposes 9 real tools (deploys, alerts, read-only SQL, writes) |
-| Built-in GitHub MCP | Real PR creation, issue management, code search |
-| Sandbox (Daytona) | Agent-written Python bisect + SQL run isolated from the host |
-| Subagents | Deploys / alerts / metrics investigated in parallel, summaries merged |
-| Approvals | Every write tool is gated; read-only tools run freely |
-| Persistent sessions | Investigation survives refresh/reconnect mid-task |
-| Generative UI | Analytics results rendered as tables + charts |
-| Model-agnostic | Switch providers from the UI without touching code |
-
-The **approval-gate pause is the centerpiece of the demo** — see `demo/DEMO-SCRIPT.md`.
-
 ## Architecture
 
+The harness sits between the user and a single MCP surface — a purpose-built `deploy-mcp` server backed entirely by the seeded, mock SQLite world. Every path that mutates state routes back through the approval gate before it reaches the user.
+
+```mermaid
+flowchart TB
+    User(("👤 User")) -->|"prompt"| TF
+
+    subgraph TF["⚡ TrueForge Harness"]
+        direction LR
+        Model["🤖 Model Provider"]
+        Sessions["💾 Sessions &amp; Persistence"]
+        Approvals["🔐 Approval Gates"]
+        Subagents["🧩 Dynamic Subagents"]
+        GenUI["✨ Generative UI"]
+        Sandbox["📦 Sandbox<br/>(Daytona)"]
+
+        Model --> Sessions
+        Model --> Subagents
+        Model --> Sandbox
+        Model --> GenUI
+        Model --> Approvals
+    end
+
+    TF -->|"tool calls"| MCP["🔌 deploy-mcp<br/>(stdio)"]
+
+    MCP --> SQLite[("🗄️ SQLite World<br/>(mock, seeded)")]
+
+    Approvals -.->|"pause → resume"| User
+
+    classDef harness fill:#E8F4FF,stroke:#1976D2,stroke-width:2px,color:#0D47A1;
+    classDef mcp fill:#F5EAFE,stroke:#8E44AD,stroke-width:2px,color:#4A235A;
+    classDef ext fill:#FFF4E5,stroke:#F39C12,stroke-width:2px,color:#7D4E00;
+    classDef actor fill:#EAFBEA,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
+
+    class Model,Sessions,Approvals,Subagents,GenUI,Sandbox harness;
+    class MCP mcp;
+    class SQLite ext;
+    class User actor;
+
+    style TF fill:#F7FBFF,stroke:#1976D2,stroke-width:3px,color:#0D47A1
 ```
-alert → get_alert/list_alerts (MCP, read-only)
-→ list_deploys + deploy_stats (MCP, read-only)
-→ subagents fan out: deploys | alerts | metrics
-→ sandbox runs Python bisect on fetched rows → JSON verdict
-→ ⛔ APPROVAL GATE (human sees evidence + exact action)
-→ rollback_deploy (gated) → verify recovery via query_db
+
+### MCP Tool Surface
+
+`deploy-mcp` splits cleanly into read-only tools the agent can call freely, and write tools that are always approval-gated.
+
+```mermaid
+mindmap
+  root((deploy-mcp))
+    Read-only
+      list_deploys
+      get_deploy
+      deploy_stats
+      list_alerts
+      get_alert
+      query_db
+    🔐 Write — approval gated
+      rollback_deploy
+      write_back
+      open_pr
 ```
+
+---
+
+## Request Flow: Incident Investigation
+
+This is the on-call path: three subagents fan out in parallel to gather deploys, alerts, and metrics, the agent runs a bisect in the sandbox to compute the culprit deploy, then stops dead at the approval gate before touching production.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant TF as TrueForge
+    participant Agent
+    box rgba(232,244,255,0.35) Dynamic Subagents
+        participant SA1 as Deploys Agent
+        participant SA2 as Alerts Agent
+        participant SA3 as Metrics Agent
+    end
+    participant MCP as deploy-mcp
+    participant SQL as SQLite
+    participant Sandbox
+
+    User->>TF: Investigate payment-failures alert
+    TF->>Agent: Load manifest, start session
+
+    par Fan out investigation
+        Agent->>SA1: Fetch recent deploys
+        SA1->>MCP: list_deploys / deploy_stats
+        MCP->>SQL: SELECT deploy records
+        SQL-->>MCP: rows
+        MCP-->>SA1: deploy stats
+    and
+        Agent->>SA2: Fetch alert details
+        SA2->>MCP: get_alert
+        MCP->>SQL: SELECT alert records
+        SQL-->>MCP: rows
+        MCP-->>SA2: alert details
+    and
+        Agent->>SA3: Fetch metrics window
+        SA3->>MCP: query_db(sql)
+        MCP->>SQL: SELECT metric records
+        SQL-->>MCP: rows
+        MCP-->>SA3: metric rows
+    end
+
+    SA1-->>Agent: deploy summary
+    SA2-->>Agent: alert summary
+    SA3-->>Agent: metrics summary
+
+    Agent->>Sandbox: Run bisect with candidates and metrics
+    Sandbox-->>Agent: Verdict - culprit is dep-4c21
+
+    Agent-->>User: Propose rollback_deploy dep-4c21
+    Note over User,Agent: APPROVAL GATE
+
+    User->>Agent: Approves
+    Agent->>MCP: rollback_deploy dep-4c21
+    MCP->>SQL: BEGIN then update deploys then COMMIT
+    SQL-->>MCP: OK
+    MCP-->>Agent: Rollback confirmed
+
+    Agent->>MCP: query_db to verify recovery
+    MCP->>SQL: SELECT recent error rates
+    SQL-->>MCP: rows
+    MCP-->>Agent: error rate back to baseline
+
+    Agent-->>User: Root cause confirmed, service recovered
+
+```
+
+---
+
+## Request Flow: Analytics Query
+
+This is the ad-hoc question path: the agent writes its own SQL, runs it read-only through the SQL guard, renders results with Generative UI, and only hits the approval gate when the user asks to persist the result.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant TF as TrueForge
+    participant Agent
+    participant MCP as deploy-mcp
+    participant SQL as SQLite
+    participant GenUI as Generative UI
+
+    User->>TF: "Which endpoint cost us the most errors last week?"
+    TF->>Agent: Load manifest, start session
+
+    Agent->>Agent: Write SQL query
+    Agent->>MCP: query_db(sql)
+    MCP->>SQL: Execute read-only SQL (SQL guard enforced)
+    SQL-->>MCP: Result rows
+    MCP-->>Agent: Rows + metadata
+
+    Agent->>GenUI: Render table + bar chart
+    GenUI-->>User: Visual results in chat
+
+    User->>Agent: "Write this back"
+    Agent-->>User: Propose write_back
+    Note over User,Agent: 🔐 APPROVAL GATE
+
+    User->>Agent: Approves
+    Agent->>MCP: write_back(question, sql, summary, json)
+    MCP->>SQL: BEGIN
+    MCP->>SQL: INSERT INTO analysis_results(...)
+    MCP->>SQL: INSERT INTO events(...)
+    MCP->>SQL: COMMIT
+    SQL-->>MCP: OK
+    MCP-->>Agent: analysis_id stored
+
+    Agent-->>User: Confirmed persisted
+```
+
+---
 
 ## Quickstart (judge path)
 
@@ -116,28 +255,19 @@ npx @truefoundry/trueforge  # → http://localhost:8790
 npm run create-agent
 
 # Option B: Manual — in TrueForge UI:
-#   Settings → Connectors → github (built-in) → add GITHUB_TOKEN
 #   Agent Library → Create Agent → load agent.json
 ```
 
+No other connectors, tokens, or external accounts are needed — `deploy-mcp` is self-contained.
+
 ## Automated agent creation (TrueForge SDK)
 
-Creates/updates the agent manifest. Connectors must be added manually via TrueForge UI.
+Creates/updates the agent manifest. The `deploy-mcp` connector must still be added manually via the TrueForge UI (step 3 above).
 
 ```bash
 # Requires TrueForge running at http://localhost:8790
 npm run create-agent
 ```
-
-## GitHub MCP (real PR support)
-
-The agent uses TrueForge's **built-in GitHub MCP server** (no custom connector needed). Configure it:
-
-1. Create a GitHub Personal Access Token with `repo` scope
-2. In TrueForge UI: Settings → Connectors → github → add `GITHUB_TOKEN`
-3. The agent will use the real `create_pull_request`, `create_issue`, `search_code`, etc. tools
-
-The agent.json references it as `name: "github"` with `preload: false` and approval gating on `@write` and `@destructive` tools.
 
 ## Troubleshooting
 
@@ -146,24 +276,14 @@ The agent.json references it as `name: "github"` with `preload: false` and appro
 | Approval doesn't appear | Ask the agent to explicitly propose the rollback call; the gate fires on the write tool |
 | Sandbox hiccup | Local fallback still runs the script; say "isolated execution" and move on |
 | Anything weird | `npm run reseed`, reload, retry. The world is deterministic. |
-| Qodo not responding | Verify GitHub app access; comment `/agentic_review` on PR |
+| Qodo not responding | Verify GitHub app access on the repo; comment `/agentic_review` on PR |
 | Connectors not loading | Ensure `TRUEFORGE_DATA_DIR` is set and you ran `./scripts/setup.sh` first |
-
-## Qodo Code Review Evidence
-
-Per hackathon requirements (FR-7), all substantive changes flow through PRs reviewed by Qodo.
-
-- **Representative PR:** [#3 — deploy-mcp: implement all 9 tools with approval gating](https://github.com/amank-root/db-rag-agent/pull/3)
-- **Qodo findings addressed:** High-severity findings on SQL injection guard (sql-guard.ts) and idempotent seed logic were fixed. Medium findings on test coverage were resolved by adding tools.test.ts.
-- **Review thread:** [Qodo review on PR #3](https://github.com/amank-root/db-rag-agent/pull/3#issuecomment-xxxxx) — follow-up review passed after fixes.
-
-All PRs in this repo follow: branch → PR → `/agentic_review` → address findings → follow-up review → merge.
 
 ## Project structure
 
 ```
 .
-├── agent.json                    # TrueForge agent spec (uses built-in github MCP)
+├── agent.json                    # TrueForge agent spec (deploy-mcp only, approval-gated)
 ├── connectors/
 │   └── deploy-mcp.json           # Custom MCP connector (stdio) - edit ${PROJECT_ROOT} before loading
 ├── deploy-mcp/                   # Custom MCP server (9 tools)
@@ -183,16 +303,6 @@ All PRs in this repo follow: branch → PR → `/agentic_review` → address fin
 └── docs/
     └── social-post.md            # Day-7 submission post
 ```
-
-## Demo script
-
-See `demo/DEMO-SCRIPT.md` for the ~3 minute filming plan highlighting:
-- Real MCP tool calls
-- Parallel subagent investigation
-- Sandbox bisect computation
-- **The approval gate pause** (judging differentiator)
-- Session persistence on refresh
-- Analytics loop with chart rendering
 
 ## License
 
