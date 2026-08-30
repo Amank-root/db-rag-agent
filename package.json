@@ -7,6 +7,8 @@
   "type": "module",
   "scripts": {
     "setup": "bash scripts/setup.sh",
+    "install:all": "npm install --no-fund --no-audit && cd deploy-mcp && npm install --no-fund --no-audit",
+    "prebuild": "cd deploy-mcp && npm install --no-fund --no-audit 2>/dev/null || true",
     "build": "npm --prefix deploy-mcp run build",
     "start": "npm --prefix deploy-mcp run start",
     "seed": "npm --prefix deploy-mcp run seed",
