@@ -1,4 +1,5 @@
-# Deploy Detective (D2)
+# Deploy Detective (D2) [![Live](https://img.shields.io/badge/Live-ak--agent-brightgreen)](https://ak-deploy-true.up.railway.app)
+
 
 **Incident response + analytics agent, built on the TrueForge harness.**
 Investigates alerts with read-only tools, computes root cause in a sandbox, and
