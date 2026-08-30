@@ -8,6 +8,7 @@
   "scripts": {
     "setup": "bash scripts/setup.sh",
     "build": "npm --prefix deploy-mcp run build",
+    "start": "npm --prefix deploy-mcp run start",
     "seed": "npm --prefix deploy-mcp run seed",
     "reseed": "npm --prefix deploy-mcp run reseed",
     "test": "npm --prefix deploy-mcp test",
